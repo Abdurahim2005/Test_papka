@@ -894,40 +894,33 @@ async def check_subscription(client, uid: int) -> list:
         if member is None or member.status in (enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.LEFT):
             not_joined.append((chat_id, info))
     return not_joined
-
 async def gate_check(client, uid: int, chat_id: int, lang: str) -> bool:
     if not required_channels:
         return True
+
     not_joined = await check_subscription(client, uid)
-    # Agar barcha tekshiriladigan kanallarga a'zo bo'lsa, True qaytaramiz
-    all_telegram_joined = True
-    for cid, info in required_channels.items():
-        if info.get("is_external", 0) == 0 and any(cid == x[0] for x in not_joined):
-            all_telegram_joined = False
-            break
-    if all_telegram_joined:
+    if not not_joined:                     # hamma kanalga obuna bo‘lsa
         return True
 
     texts = TEXTS.get(lang, TEXTS["uz"])
     buttons = []
-    for cid, info in required_channels.items():
+
+    # Faqat obuna bo‘lmagan kanallar ro‘yxati
+    for cid, info in not_joined:
         if info.get("is_external", 0) == 1:
             buttons.append([InlineKeyboardButton(f"🔗 {info['title']}", url=info.get("invite_link", "https://t.me"))])
         elif info.get("is_private", 0) == 1:
-            # Maxfiy kanal – taklif havolasini yashiramiz
             link = info.get("invite_link", "https://t.me")
             buttons.append([InlineKeyboardButton(f"🔒 {info['title']}", url=link)])
         else:
             username = (info.get("username") or "").lstrip("@")
-            invite_link = info.get("invite_link") or ""
-            title = info.get("title") or "Kanal"
             if username:
                 buttons.append([InlineKeyboardButton(f"📢 @{username}", url=f"https://t.me/{username}")])
-            elif invite_link:
-                buttons.append([InlineKeyboardButton(f"📢 {title}", url=invite_link)])
+            elif info.get("invite_link"):
+                buttons.append([InlineKeyboardButton(f"📢 {info['title']}", url=info.get("invite_link"))])
+
     buttons.append([InlineKeyboardButton(texts["join_check_btn"], callback_data="check_join")])
 
-    # Avvalgi obuna xabarlarini o‘chiramiz (agar mavjud bo‘lsa)
     old_welcome = user_welcome_msg.pop(uid, None)
     await safe_delete(old_welcome)
 
