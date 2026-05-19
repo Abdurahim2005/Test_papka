@@ -1232,6 +1232,30 @@ async def cmd_start(client, message):
     )
     user_welcome_msg[uid] = sent
 
+@app.on_message(filters.command("this_private"))
+async def cmd_this_private(client, message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    # Faqat kanalda yoki guruhda ishlaydi, private chatda emas
+    if message.chat.type == enums.ChatType.PRIVATE:
+        await message.reply("❌ Bu buyruq faqat kanal yoki guruhda ishlaydi.")
+        return
+
+    chat_id = message.chat.id
+    if message.chat.type == enums.ChatType.CHANNEL and not message.chat.username:
+        title = message.chat.title or str(chat_id)
+        if chat_id not in required_channels:
+            add_channel(chat_id, title, is_private=1, invite_link="")
+            awaiting_invite_link[chat_id] = ADMIN_ID
+            await message.reply(
+                "✅ Maxfiy kanal ro‘yxatga qo‘shildi.\n"
+                "Endi menga foydalanuvchilarga ko‘rinadigan **taklif havolasini** yuboring (masalan, `https://t.me/+xxx`)."
+            )
+        else:
+            await message.reply("Bu kanal allaqachon qo‘shilgan.")
+    else:
+        await message.reply("Bu kanal maxfiy emas (username bor) yoki kanal emas.")
+
 # ════════════════════════════════════════════════════════════
 #  TIL TANLASH
 # ════════════════════════════════════════════════════════════
@@ -1262,24 +1286,7 @@ async def cb_set_lang(client, call):
     if required_channels:
         await gate_check(client, uid, call.message.chat.id, lang)
         
-@app.on_message(filters.command("this_private") & ~filters.private)  # guruh/kanalda ishlaydi
-async def cmd_this_private(client, message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    chat_id = message.chat.id
-    # Agar bu kanal bo‘lsa va username bo‘lmasa (maxfiy)
-    if message.chat.type == enums.ChatType.CHANNEL and not message.chat.username:
-        # Kanalni bazaga qo‘shamiz (avval mavjud emasligini tekshirish mumkin)aq    
-        title = message.chat.title or str(chat_id)
-        # Avval mavjudmi?
-        if chat_id not in required_channels:
-            add_channel(chat_id, title, is_private=1, invite_link="")  # invite_link keyin beriladi
-            await message.reply("✅ Kanal maxfiy ro‘yxatga qo‘shildi. Endi menga foydalanuvchilarga ko‘rinadigan taklif havolasini yuboring (masalan, https://t.me/+xxx).")
-            awaiting_invite_link[chat_id] = ADMIN_ID
-        else:
-            await message.reply("Bu kanal allaqachon qo‘shilgan.")
-    else:
-        await message.reply("Bu buyruq faqat maxfiy kanallarda (username siz) ishlaydi.")
+
 
 @app.on_callback_query(filters.create(lambda _, __, q: q.data == "change_lang"))
 async def cb_change_lang(client, call):
@@ -1458,6 +1465,9 @@ async def on_text(client, message):
     text = message.text.strip() if message.text else ""
 
     if is_banned(uid):
+        await safe_delete(message)
+        return
+    if text.startswith("/this_private"):
         await safe_delete(message)
         return
 
