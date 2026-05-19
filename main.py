@@ -155,6 +155,15 @@ def init_db():
             compression_level INTEGER DEFAULT 0
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS join_requests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            chat_id     INTEGER NOT NULL,
+            created_at  TEXT    NOT NULL,
+            UNIQUE(telegram_id, chat_id)
+        )
+    """)
 
     # Mavjud jadvallarda eski ustunlarni qo'shish
     for col, dfn in [("waiting_zip","INTEGER DEFAULT 0"), ("is_banned","INTEGER DEFAULT 0")]:
@@ -847,23 +856,28 @@ async def check_subscription(client, uid: int) -> list:
     for chat_id, info in required_channels.items():
         if info.get("is_external", 0) == 1:
             continue
+
         if info.get("is_private", 0) == 1:
-            # Maxfiy kanal: join requestlarni tekshirish
+            # Maxfiy kanal: 1) get_chat_member, 2) join_request bazasi
             try:
-                found = False
-                # limit=0 -> barcha so'rovlarni olish
-                async for request in client.get_chat_join_requests(chat_id, limit=0):
-                    if request.user.id == uid:
-                        found = True
-                        break
-                if not found:
-                    not_joined.append((chat_id, info))
+                member = await client.get_chat_member(chat_id, uid)
+                if member.status in (enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR):
+                    continue  # a'zo
             except Exception:
-                # Agar so'rovlarni olishda xatolik bo'lsa, qo'shilmagan deb hisoblaymiz
-                not_joined.append((chat_id, info))
+                pass
+
+            # get_chat_member a'zo deb topmadi, bazaga qaraymiz
+            r = get_db().execute(
+                "SELECT 1 FROM join_requests WHERE telegram_id=? AND chat_id=?",
+                (uid, chat_id)
+            ).fetchone()
+            if r:
+                # So‘rov yuborgan, hali admin tasdiqlamagan bo‘lsa ham ruxsat beramiz
+                continue
+            not_joined.append((chat_id, info))
             continue
 
-        # Publik kanal
+        # Publik kanal (avvalgidek)
         refs = []
         username = (info.get("username") or "").lstrip("@")
         if username:
@@ -1181,7 +1195,13 @@ def _is_admin(_, __, q):
     return q.from_user.id == ADMIN_ID
 
 admin_filter = filters.create(_is_admin)
-app = Client("zip_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client(
+    "zip_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    allowed_updates=[enums.AllowedUpdates.CHAT_JOIN_REQUEST]  # yangi
+)
 
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def cmd_admin(client, message):
@@ -1268,6 +1288,19 @@ async def on_forwarded(client, message):
     else:
         await message.reply("Iltimos, faqat kanaldan forward qilingan post yuboring.")
 
+@app.on_chat_join_request()
+async def handle_join_request(client, join_request: enums.ChatJoinRequest):
+    # Faqat kanal/guruhdagi so‘rovlarni saqlaymiz
+    c = get_db()
+    c.execute("""
+        INSERT OR IGNORE INTO join_requests(telegram_id, chat_id, created_at)
+        VALUES(?,?,?)
+    """, (
+        join_request.from_user.id,
+        join_request.chat.id,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
+    c.commit(); db_sync()
 # ════════════════════════════════════════════════════════════
 #  TIL TANLASH
 # ════════════════════════════════════════════════════════════
