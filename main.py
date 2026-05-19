@@ -2493,7 +2493,6 @@ def keep_alive():
 #  MAIN
 # ════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    from pyrogram.types import UpdateType
     if not all([os.environ.get("API_ID"), os.environ.get("API_HASH"), os.environ.get("BOT_TOKEN")]):
         raise RuntimeError("API_ID, API_HASH, BOT_TOKEN to'ldirilmagan!")
     get_db(); init_db(); _load_channels()
