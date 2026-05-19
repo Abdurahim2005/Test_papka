@@ -1232,29 +1232,39 @@ async def cmd_start(client, message):
     )
     user_welcome_msg[uid] = sent
 
-@app.on_message(filters.command("this_private"))
-async def cmd_this_private(client, message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    # Faqat kanalda yoki guruhda ishlaydi, private chatda emas
-    if message.chat.type == enums.ChatType.PRIVATE:
-        await message.reply("❌ Bu buyruq faqat kanal yoki guruhda ishlaydi.")
-        return
+@app.on_message(filters.forwarded & filters.user(ADMIN_ID))
+async def on_forwarded(client, message):
+    # Faqat kanaldan forward qilingan bo'lsa
+    if message.forward_from_chat and message.forward_from_chat.type == enums.ChatType.CHANNEL:
+        chat = message.forward_from_chat
+        title = chat.title or str(chat.id)
+        username = chat.username or ""
+        chat_id = chat.id
 
-    chat_id = message.chat.id
-    if message.chat.type == enums.ChatType.CHANNEL and not message.chat.username:
-        title = message.chat.title or str(chat_id)
-        if chat_id not in required_channels:
-            add_channel(chat_id, title, is_private=1, invite_link="")
+        # Agar allaqachon qo'shilgan bo'lsa
+        if chat_id in required_channels:
+            await message.reply("Bu kanal allaqachon qo‘shilgan.")
+            return
+
+        if not username:
+            # Maxfiy kanal (username yo'q)
+            add_channel(chat_id, title, is_private=1)
             awaiting_invite_link[chat_id] = ADMIN_ID
             await message.reply(
-                "✅ Maxfiy kanal ro‘yxatga qo‘shildi.\n"
-                "Endi menga foydalanuvchilarga ko‘rinadigan **taklif havolasini** yuboring (masalan, `https://t.me/+xxx`)."
+                f"✅ Maxfiy kanal qo‘shildi: *{title}*\n"
+                f"Endi menga foydalanuvchilarga ko‘rinadigan **taklif havolasini** yuboring (masalan, `https://t.me/+xxx`).",
+                parse_mode=enums.ParseMode.MARKDOWN
             )
         else:
-            await message.reply("Bu kanal allaqachon qo‘shilgan.")
+            # Publik kanal (username bor) – avtomatik qo‘shamiz
+            add_channel(chat_id, title, username=username)
+            await message.reply(
+                f"✅ Publik kanal qo‘shildi: *{title}*\n"
+                f"🔗 @{username}",
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
     else:
-        await message.reply("Bu kanal maxfiy emas (username bor) yoki kanal emas.")
+        await message.reply("Iltimos, faqat kanaldan forward qilingan post yuboring.")
 
 # ════════════════════════════════════════════════════════════
 #  TIL TANLASH
