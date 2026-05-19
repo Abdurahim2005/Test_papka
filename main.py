@@ -848,16 +848,18 @@ async def check_subscription(client, uid: int) -> list:
         if info.get("is_external", 0) == 1:
             continue
         if info.get("is_private", 0) == 1:
-            # Maxfiy kanal – join requestlarni tekshirish
+            # Maxfiy kanal: join requestlarni tekshirish
             try:
                 found = False
-                async for request in client.get_chat_join_requests(chat_id, limit=100):
-                    if request.user.id == uid and request.pending:
+                # limit=0 -> barcha so'rovlarni olish
+                async for request in client.get_chat_join_requests(chat_id, limit=0):
+                    if request.user.id == uid:
                         found = True
                         break
                 if not found:
                     not_joined.append((chat_id, info))
             except Exception:
+                # Agar so'rovlarni olishda xatolik bo'lsa, qo'shilmagan deb hisoblaymiz
                 not_joined.append((chat_id, info))
             continue
 
@@ -2041,13 +2043,34 @@ async def adm_disk(client, call):
 @app.on_callback_query(admin_filter & filters.create(lambda _, __, q: q.data == "adm_channels"))
 async def adm_channels(client, call):
     channels = get_channels()
-    text = "📢 *Majburiy kanallar:*\n\n" + "\n".join(
-    f"• {info['title']} {'🔒' if info.get('is_private',0) else '📢'} — `{info.get('invite_link','—')}` (`{cid}`)"
-    for cid, info in channels.items()
-    ) if channels else "📢 Hozircha kanal qo'shilmagan."
+    
+    # Matnli ro'yxat tayyorlaymiz
+    if channels:
+        lines = ["📢 *Majburiy kanallar:*\n"]
+        for cid, info in channels.items():
+            icon = "🔒" if info.get("is_private", 0) else "📢"
+            link = info.get("invite_link", "—")
+            line = f"• {info['title']} {icon} — `{link}` (`{cid}`)"
+            
+            # Maxfiy kanal uchun so'rovlar sonini qo'shamiz
+            if info.get("is_private", 0) == 1:
+                try:
+                    count = 0
+                    async for _ in client.get_chat_join_requests(cid, limit=0):
+                        count += 1
+                    line += f" | {count} ta so'rov"
+                except Exception as e:
+                    line += " | so'rovlarni olishda xatolik"
+            lines.append(line)
+        text = "\n".join(lines)
+    else:
+        text = "📢 Hozircha kanal qo'shilmagan."
+
+    # O'chirish tugmalari
     btns = [[InlineKeyboardButton(f"🗑 {info['title']} o'chirish", callback_data=f"adm_rmchan_{cid}")]
             for cid, info in channels.items()]
     btns.append([InlineKeyboardButton("➕ Kanal qo'shish", callback_data="adm_addchan")])
+
     await call.message.reply(text, parse_mode=enums.ParseMode.MARKDOWN,
                              reply_markup=InlineKeyboardMarkup(btns))
     await call.answer()
