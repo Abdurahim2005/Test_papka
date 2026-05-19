@@ -1200,7 +1200,7 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    allowed_updates=[enums.AllowedUpdates.CHAT_JOIN_REQUEST]  # yangi
+    allowed_updates=["chat_join_request"]   # string holatda
 )
 
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
