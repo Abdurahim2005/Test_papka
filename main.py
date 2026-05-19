@@ -10,8 +10,9 @@ from flask import Flask
 from pyrogram import Client, filters, enums
 from pyrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, Message
+    ReplyKeyboardMarkup, KeyboardButton, Message,  ChatJoinRequest
 )
+
 
 # ════════════════════════════════════════════════════════════
 #  CONFIG
@@ -1199,8 +1200,7 @@ app = Client(
     "zip_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    allowed_updates=["chat_join_request"]   # string holatda
+    bot_token=BOT_TOKEN
 )
 
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
@@ -1289,9 +1289,10 @@ async def on_forwarded(client, message):
         await message.reply("Iltimos, faqat kanaldan forward qilingan post yuboring.")
 
 @app.on_chat_join_request()
-async def handle_join_request(client, join_request: enums.ChatJoinRequest):
-    # Faqat kanal/guruhdagi so‘rovlarni saqlaymiz
+async def handle_join_request(client: Client, join_request: ChatJoinRequest):
+    # Ma'lumotlar bazasiga ulanish
     c = get_db()
+    
     c.execute("""
         INSERT OR IGNORE INTO join_requests(telegram_id, chat_id, created_at)
         VALUES(?,?,?)
@@ -1300,7 +1301,8 @@ async def handle_join_request(client, join_request: enums.ChatJoinRequest):
         join_request.chat.id,
         datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ))
-    c.commit(); db_sync()
+    c.commit()
+    db_sync()
 # ════════════════════════════════════════════════════════════
 #  TIL TANLASH
 # ════════════════════════════════════════════════════════════
@@ -2491,6 +2493,7 @@ def keep_alive():
 #  MAIN
 # ════════════════════════════════════════════════════════════
 if __name__ == "__main__":
+    from pyrogram.types import UpdateType
     if not all([os.environ.get("API_ID"), os.environ.get("API_HASH"), os.environ.get("BOT_TOKEN")]):
         raise RuntimeError("API_ID, API_HASH, BOT_TOKEN to'ldirilmagan!")
     get_db(); init_db(); _load_channels()
