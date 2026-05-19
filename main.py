@@ -58,6 +58,7 @@ user_excess:         dict = {}
 user_limit_debounce: dict = {}
 user_storage_rej:    dict = {}
 required_channels:   dict = {}
+awaiting_invite_link: dict = {}   # chat_id -> admin_id (taklif havolasi kutilmoqda)
 
 user_donating:       dict = {}
 user_contact_admin:  dict = {}
@@ -1260,6 +1261,25 @@ async def cb_set_lang(client, call):
     )
     if required_channels:
         await gate_check(client, uid, call.message.chat.id, lang)
+        
+@app.on_message(filters.command("this_private") & ~filters.private)  # guruh/kanalda ishlaydi
+async def cmd_this_private(client, message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    chat_id = message.chat.id
+    # Agar bu kanal bo‘lsa va username bo‘lmasa (maxfiy)
+    if message.chat.type == enums.ChatType.CHANNEL and not message.chat.username:
+        # Kanalni bazaga qo‘shamiz (avval mavjud emasligini tekshirish mumkin)aq    
+        title = message.chat.title or str(chat_id)
+        # Avval mavjudmi?
+        if chat_id not in required_channels:
+            add_channel(chat_id, title, is_private=1, invite_link="")  # invite_link keyin beriladi
+            await message.reply("✅ Kanal maxfiy ro‘yxatga qo‘shildi. Endi menga foydalanuvchilarga ko‘rinadigan taklif havolasini yuboring (masalan, https://t.me/+xxx).")
+            awaiting_invite_link[chat_id] = ADMIN_ID
+        else:
+            await message.reply("Bu kanal allaqachon qo‘shilgan.")
+    else:
+        await message.reply("Bu buyruq faqat maxfiy kanallarda (username siz) ishlaydi.")
 
 @app.on_callback_query(filters.create(lambda _, __, q: q.data == "change_lang"))
 async def cb_change_lang(client, call):
@@ -1702,10 +1722,7 @@ async def on_text(client, message):
                 await message.reply("❌ Noto'g'ri ID.")
             return
 
-         # ═══════════════════════════════════════════════════
-        # YANGI: fayl limiti uchun qo‘shimchalar SHU YERGA
-        # ═══════════════════════════════════════════════════
-
+        # YANGI: fayl limiti uchun qo‘shimchalar
         if action == "set_file_limit":
             parts = raw.split()
             if len(parts) < 2:
@@ -1747,46 +1764,37 @@ async def on_text(client, message):
 
             # Telegram havolasimi yoki username (@...)
             if raw_text.startswith('@') or 't.me/' in raw_text:
-                # tozalab olamiz
                 normalized = raw_text
                 if not normalized.startswith('@'):
-                    # https://t.me/... ko'rinishidan @... qilish
                     normalized = normalized.replace('https://t.me/', '@').replace('http://t.me/', '@').replace('t.me/', '@')
                 try:
-                    # Avval get_chat sinab ko'ramiz
                     chat = await client.get_chat(normalized)
                     title = chat.title or normalized
                     uname = (getattr(chat, 'username', None) or '').lstrip('@')
                     is_private = 0
                     invite_link = ''
                     if not uname:
-                        # private kanal – taklif havolasini olamiz yoki kiritilgan havolani saqlaymiz
                         try:
                             invite_link = await client.export_chat_invite_link(chat.id)
                         except Exception:
-                            invite_link = raw_text  # kiritilgan havolani ishlatamiz
+                            invite_link = raw_text
                         is_private = 1
                     add_channel(chat.id, title, username=uname, invite_link=invite_link, is_private=is_private)
                     ref = f"@{uname}" if uname else invite_link
                     await message.reply(f"✅ Kanal qo'shildi: *{title}*\n🔗 `{ref}`\n🆔 `{chat.id}`",
                                         parse_mode=enums.ParseMode.MARKDOWN)
                 except Exception:
-                    # get_chat ishlamadi – ehtimol private join link (t.me/+...)
                     if '/joinchat' in raw_text or '/+' in raw_text:
                         try:
-                            # join_chat orqali kanalga qo'shilamiz va ma'lumot olamiz
                             chat = await client.join_chat(raw_text)
                             title = chat.title or raw_text
                             add_channel(chat.id, title, username='', invite_link=raw_text, is_private=1)
                             await message.reply(f"✅ Maxfiy kanal qo'shildi: *{title}*\n🔗 `{raw_text}`\n🆔 `{chat.id}`",
                                                 parse_mode=enums.ParseMode.MARKDOWN)
                         except Exception as e2:
-                            # join_chat ham ishlamadi – bot kanalda admin emas yoki link yaroqsiz
-                            # tashqi sifatida qo'shib qo'yamiz
                             add_channel(-abs(hash(raw_text)) % 1000000, raw_text, invite_link=raw_text, is_external=1)
                             await message.reply(f"⚠️ Bot kanalga qo'shila olmadi. Tashqi havola sifatida qo'shildi (tekshirilmaydi): {raw_text}")
                     else:
-                        # umuman topilmadi
                         add_channel(-abs(hash(raw_text)) % 1000000, raw_text, invite_link=raw_text, is_external=1)
                         await message.reply(f"⚠️ Kanal topilmadi, tashqi havola sifatida qo'shildi.")
                 return
@@ -1796,9 +1804,6 @@ async def on_text(client, message):
             await message.reply(f"✅ Tashqi havola qo'shildi (tekshirilmaydi): {raw_text}")
             return
 
-        # ═══════════════════════════════════════════════════
-        # YANGI QO‘SHIMCHALAR TUGADI
-        # ═══════════════════════════════════════════════════
         # Generic user lookup actions (ban, unban, info, clear)
         try:
             target_id = int(re.search(r"\d+", raw).group())
@@ -1879,8 +1884,25 @@ async def on_text(client, message):
         except Exception:
             pass
         return
-        # ── Admin: kanal qo‘shish bosqichi (multi-step) ──
-    
+
+    # ── Admin: taklif havolasini kutish (private kanal uchun) ──
+    if uid == ADMIN_ID and awaiting_invite_link:
+        link = text.strip()
+        if link.startswith("https://t.me/") or link.startswith("http://t.me/") or link.startswith("t.me/"):
+            for chat_id, admin_id in list(awaiting_invite_link.items()):
+                if admin_id == ADMIN_ID:
+                    c = get_db()
+                    c.execute("UPDATE channels SET invite_link=? WHERE chat_id=?", (link, chat_id))
+                    c.commit(); db_sync()
+                    if chat_id in required_channels:
+                        required_channels[chat_id]["invite_link"] = link
+                    del awaiting_invite_link[chat_id]
+                    await message.reply("✅ Taklif havolasi saqlandi. Endi foydalanuvchilar kanalga qo‘shila oladi.")
+                    return
+            await message.reply("❌ Kutilayotgan kanal topilmadi.")
+        else:
+            await message.reply("❌ Iltimos, to‘g‘ri Telegram havolasini yuboring.")
+        return
 
     await safe_delete(message)
 
@@ -2000,7 +2022,7 @@ async def adm_disk(client, call):
 async def adm_channels(client, call):
     channels = get_channels()
     text = "📢 *Majburiy kanallar:*\n\n" + "\n".join(
-    f"• {info['title']} {'🔗' if info.get('is_external',0)==1 else '📢'} — `{info.get('invite_link','—')}` (`{cid}`)"
+    f"• {info['title']} {'🔒' if info.get('is_private',0) else '📢'} — `{info.get('invite_link','—')}` (`{cid}`)"
     for cid, info in channels.items()
     ) if channels else "📢 Hozircha kanal qo'shilmagan."
     btns = [[InlineKeyboardButton(f"🗑 {info['title']} o'chirish", callback_data=f"adm_rmchan_{cid}")]
