@@ -1023,12 +1023,12 @@ def start_auto_zip(client, chat_id: int, uid: int, delay: int = AUTO_ZIP_DELAY, 
 
 
 
-## Modul darajasida (fayl tepasida yoki shu funksiyadan oldin) global o'zgaruvchi yaratamiz
-if 'user_active_paths' not in globals():
-    globals()['user_active_paths'] = {}
+# Modul darajasida (fayl tepasida, configlar tagida) joriy hisobni saqlovchi yangi o'zgaruvchi ochamiz:
+if 'user_base_count' not in globals():
+    globals()['user_base_count'] = {}
 
 # ════════════════════════════════════════════════════════════
-#  FAYL QABUL QILISH  (2x hisoblash bugi butunlay tuzatildi)
+#  FAYL QABUL QILISH (Pure In-Memory Counter & Temp File Filtered)
 # ════════════════════════════════════════════════════════════
 async def receive_file(client, message: Message, obj, filename: str):
     uid = message.from_user.id
@@ -1057,30 +1057,28 @@ async def receive_file(client, message: Message, obj, filename: str):
     accepted = False
     was_downloading = False
 
-    # Global tracking setini tekshirish/yaratish
-    if uid not in user_active_paths:
-        user_active_paths[uid] = set()
-
     udir      = user_dir(uid)
     safe_name = sanitize_filename(filename)
 
     lock = get_user_file_lock(uid)
     async with lock:
-        # Fayl nomini lock ichida aniqlaymiz (nomlar to'qnashmasligi uchun)
         save_path = unique_path(udir, safe_name)
-        fname = os.path.basename(save_path)
+
+        # 1. AGAR YANGI PAKET BO'LSA: Diskdagi real fayllarni faqat bir marta sanab olamiz
+        if user_downloading.get(uid, 0) == 0:
+            if os.path.exists(udir):
+                # Vaqtinchalik (.temp, .part) fayllarni sanashdan mutlaqo cheklaymiz!
+                disk_files = [f for f in os.listdir(udir) if os.path.isfile(os.path.join(udir, f)) and not f.endswith(('.temp', '.part', '.download'))]
+                user_base_count[uid] = len(disk_files)
+            else:
+                user_base_count[uid] = 0
 
         used_now = disk_used(uid) + user_reserved_bytes.get(uid, 0)
         
-        # Diskdagi bor fayllar ro'yxati
-        disk_files = [f for f in os.listdir(udir) if os.path.isfile(os.path.join(udir, f))]
-        
-        # Hozir yuklanayotgan fayllarni disk ro'yxatidan chegirib tashlaymiz (Double counting oldini olish)
-        completed_cnt = sum(1 for f in disk_files if f not in user_active_paths[uid])
-        
-        # Haqiqiy joriy fayllar soni = (To'liq yuklanganlar) + (Hozir yuklanayotganlar soni)
-        cur_cnt = completed_cnt + len(user_active_paths[uid])
+        # 2. HAQIQIY JORIY HISOB: Diskdagi aniq fayllar + hozir yuklanayotganlar soni
+        cur_cnt = user_base_count.get(uid, 0) + user_downloading.get(uid, 0)
 
+        # Limitni tekshirish
         if cur_cnt >= get_user_max_files(uid):
             user_excess[uid] = user_excess.get(uid, 0) + 1
             schedule_task(user_debounce, uid, _send_excess_msg(client, message.chat.id, uid))
@@ -1090,7 +1088,7 @@ async def receive_file(client, message: Message, obj, filename: str):
                 await asyncio.sleep(DEBOUNCE_SEC)
                 rej_cnt = user_storage_rej.pop(u, 0)
                 u_dir   = user_dir(u)
-                acc_cnt = len([f for f in os.listdir(u_dir) if os.path.isfile(os.path.join(u_dir, f))])
+                acc_cnt = len([f for f in os.listdir(u_dir) if os.path.isfile(os.path.join(u_dir, f)) and not f.endswith(('.temp', '.part', '.download'))])
                 lang_u  = get_lang(u) or "uz"
                 if lang_u == "uz":
                     text = (f"⚠️ *Xotira to'lib qoldi!*\n\n"
@@ -1118,16 +1116,13 @@ async def receive_file(client, message: Message, obj, filename: str):
             was_downloading = user_downloading.get(uid, 0) > 0
             user_reserved_bytes[uid] = user_reserved_bytes.get(uid, 0) + fsize
             user_downloading[uid]    = user_downloading.get(uid, 0) + 1
-            
-            # Fayl nomini aktiv yuklanayotganlar ro'yxatiga qo'shamiz
-            user_active_paths[uid].add(fname)
             accepted = True
 
     if not accepted:
         await safe_delete(message)
         return
 
-    # Yangi fayl kelganda oldingi jarayonlarni tozalaymiz
+    # Oldingi taymer va xabarlarni tozalash
     await cancel_task(user_auto_zip, uid)
     sm_old = user_status_msg.pop(uid, None)
     await safe_delete(sm_old)
@@ -1135,16 +1130,17 @@ async def receive_file(client, message: Message, obj, filename: str):
     await safe_delete(recv_old)
     user_batch_active.pop(uid, None)
 
-    # Taymerlarni sozlash
     if not was_downloading:
         schedule_batch_timer(uid, message.chat.id, client)
     else:
         if not user_batch_active.get(uid, False):
             schedule_batch_timer(uid, message.chat.id, client)
 
-    # Faylni yuklash
+    # Faylni yuklash jarayoni
+    download_success = False
     try:
         await message.download(file_name=save_path)
+        download_success = True
     except Exception:
         pass
     finally:
@@ -1152,10 +1148,10 @@ async def receive_file(client, message: Message, obj, filename: str):
             user_downloading[uid]    = max(0, user_downloading.get(uid, 1) - 1)
             user_reserved_bytes[uid] = max(0, user_reserved_bytes.get(uid, fsize) - fsize)
             
-            # Yuklash tugagach (yoki xato bo'lgach), aktiv ro'yxatdan o'chiramiz
-            if uid in user_active_paths:
-                user_active_paths[uid].discard(fname)
-                
+            # 3. SIZ AYTGAN G'OYA: Yuklash muvaffaqiyatli bo'lsagina bazaviy hisobga +1 qo'shamiz!
+            if download_success:
+                user_base_count[uid] = user_base_count.get(uid, 0) + 1
+
         await check_batch_complete(client, uid, message.chat.id, message.from_user)
 
     await safe_delete(message)
