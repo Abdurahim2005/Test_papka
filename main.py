@@ -1153,8 +1153,11 @@ async def receive_file(client, message: Message, obj, filename: str):
                 user_base_count[uid] = user_base_count.get(uid, 0) + 1
 
         await check_batch_complete(client, uid, message.chat.id, message.from_user)
-
-    await safe_delete(message)
+    # 🔥 MANA SHU JOYI O'ZGARDI:
+    # Faqat bot muvaffaqiyatli qabul qilib, yuklab olgan fayllarnigina chatdan o'chiradi!
+    # Limitga siqmay qolgan yoki xotira to'lgani uchun rad etilgan fayllar chatda o'chmasdan qoladi.
+    if accepted and download_success:
+        await safe_delete(message)
 # ════════════════════════════════════════════════════════════
 #  BOT
 # ════════════════════════════════════════════════════════════
