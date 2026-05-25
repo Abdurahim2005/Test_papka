@@ -1238,25 +1238,78 @@ async def cmd_admin(client, message):
         ]),
     )
 # ════════════════════════════════════════════════════════════
-#  /start
+#  /start buyrug'i
 # ════════════════════════════════════════════════════════════
 @app.on_message(filters.command("start"))
 async def cmd_start(client, message):
     uid = message.from_user.id
     await safe_delete(message)
+    
     if is_banned(uid):
         return
-    if get_lang(uid) is None:
-        upsert_user(message.from_user, "uz")
-    sent = await client.send_message(
+
+    lang = get_lang(uid)
+
+    if lang is not None:
+        # 1. AGAR TIL OLDIN TANLANGAN BO'LSA: To'g'ridan-to'g'ri Welcome xabarini chiqaramiz
+        name = message.from_user.first_name or "Foydalanuvchi"
+        
+        # Eski welcome xabarini tozalaymiz
+        old_wm = user_welcome_msg.pop(uid, None)
+        await safe_delete(old_wm)
+
+        sent = await client.send_message(
+            message.chat.id,
+            tx(uid, "welcome", name=name),
+            parse_mode=enums.ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(TEXTS[lang]["change_lang"], callback_data="change_lang")
+            ]]),
+        )
+        user_welcome_msg[uid] = sent
+        await send_sticker(client, message.chat.id, "start")
+        
+        # Pastdagi asosiy menyu klaviaturasini chiqarish
+        await client.send_message(
+            message.chat.id, "👇",
+            reply_markup=main_keyboard(uid),
+        )
+        
+        # Kanallarni tekshirish (majburiy obuna)
+        if required_channels:
+            await gate_check(client, uid, message.chat.id, lang)
+            
+    else:
+        # 2. AGAR TIL TANLANMAGAN BO'LSA (Birinchi marta kirganda): Til tanlash tugmalari chiqadi
+        sent = await client.send_message(
+            message.chat.id,
+            "🌐 Tilni tanlang / Choose language:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🇺🇿 O'zbek", callback_data="setlang_uz"),
+                InlineKeyboardButton("🇬🇧 English", callback_data="setlang_en"),
+            ]]),
+        )
+        user_welcome_msg[uid] = sent
+
+# ════════════════════════════════════════════════════════════
+#  /language buyrug'i (Tilni xohlagan paytda o'zgartirish)
+# ════════════════════════════════════════════════════════════
+@app.on_message(filters.command(["language", "lang"]) & filters.private)
+async def cmd_change_lang(client, message: Message):
+    uid = message.from_user.id
+    await safe_delete(message)
+    
+    if is_banned(uid):
+        return
+
+    await client.send_message(
         message.chat.id,
-        TEXTS["uz"]["choose_lang"],
+        "🌐 Yangi tilni tanlang / Choose a new language:",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🇺🇿 O'zbek", callback_data="setlang_uz"),
             InlineKeyboardButton("🇬🇧 English", callback_data="setlang_en"),
         ]]),
     )
-    user_welcome_msg[uid] = sent
 
 @app.on_message(filters.forwarded & filters.user(ADMIN_ID))
 async def on_forwarded(client, message):
