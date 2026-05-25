@@ -940,9 +940,9 @@ def schedule_batch_timer(uid: int, chat_id: int, client):
     user_batch_timer[uid] = task
 
 async def check_batch_complete(client, uid: int, chat_id: int, user_obj):
-    """Har bir fayl yuklangach chaqiriladi. Agar yuklanayotgan fayl qolmagan bo‘lsa, yakuniy xabarni chiqaradi."""
+    """Har bir fayl jarayoni tugagach chaqiriladi."""
     if user_downloading.get(uid, 0) > 0:
-        return  # hali yuklanayotgan fayllar bor
+        return  # hali yuklanayotgan real fayllar bor
 
     # Batch tugadi – taymerni bekor qilamiz
     t = user_batch_timer.pop(uid, None)
@@ -955,8 +955,39 @@ async def check_batch_complete(client, uid: int, chat_id: int, user_obj):
 
     user_batch_active[uid] = False
 
-    # Yakuniy status xabarini yuboramiz
-    await _send_final_status(client, chat_id, uid)
+    # 🔥 YAKUNIY STATUSNI SHU YERDA ANIQ VA BITTA XABAR BILAN CHIQARAMIZ:
+    accepted = file_count(uid)
+    rejected = user_excess.pop(uid, 0) # excess_msg o'rniga shu yerda olamiz
+
+    if accepted > 0 or rejected > 0:
+        sm = user_status_msg.pop(uid, None)
+        await safe_delete(sm)  # eski status xabarini tozalaymiz
+
+        lang = get_lang(uid) or "uz"
+        user_max = get_user_max_files(uid)
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton(tx(uid, "ready_btn"), callback_data="zip_now")]])
+
+        if rejected > 0:
+            # Agar limitdan oshgan fayllar bo'lsa
+            if lang == "uz":
+                text = (f"✅ *{accepted} ta fayl* qabul qilindi!\n"
+                        f"❌ *{rejected} ta fayl* qabul qilinmadi ({user_max} ta limit).\n\n"
+                        f"👇 ZIP yasash tugmasini bosing:")
+            else:
+                text = (f"✅ *{accepted} file(s)* received!\n"
+                        f"❌ *{rejected} file(s)* rejected ({user_max} file limit).\n\n"
+                        f"👇 Press Create ZIP when ready:")
+        else:
+            # Agar hamma fayllar muvaffaqiyatli o'tgan bo'lsa
+            if lang == "uz":
+                text = (f"✅ *{accepted} ta fayl* qabul qilindi!\n\n"
+                        f"👇 ZIP yasash tugmasini bosing:")
+            else:
+                text = (f"✅ *{accepted} file(s)* received!\n\n"
+                        f"👇 Press Create ZIP:")
+
+        sent = await client.send_message(chat_id, text, parse_mode=enums.ParseMode.MARKDOWN, reply_markup=markup)
+        user_status_msg[uid] = sent
 
     # Avto-zip taymerini ishga tushiramiz
     await cancel_task(user_auto_zip, uid)
@@ -1077,11 +1108,14 @@ async def receive_file(client, message: Message, obj, filename: str):
         used_now = disk_used(uid) + user_reserved_bytes.get(uid, 0)
         cur_cnt = user_base_count.get(uid, 0) + user_downloading.get(uid, 0)
 
-        # 2. Limitlarni tekshirish
+        # 2. Limitlarni tekshirish qismi (receive_file ichida)
         if cur_cnt >= get_user_max_files(uid):
             user_excess[uid] = user_excess.get(uid, 0) + 1
-            schedule_task(user_debounce, uid, _send_excess_msg(client, message.chat.id, uid))
-            # 🔥 Fayl qabul qilinmadi (accepted = False), return bo'ladi va chatda qoladi!
+            
+            # 🔥 O'ZGARTIRILDI: Alvido _send_excess_msg! 
+            # Faqatgina paket taymeri o'chib qolmasligi uchun uni yangilab qo'yamiz
+            if not user_downloading.get(uid, 0) > 0 and not user_batch_active.get(uid, False):
+                schedule_batch_timer(uid, message.chat.id, client)
         elif used_now + fsize > max_storage:
             user_storage_rej[uid] = user_storage_rej.get(uid, 0) + 1
             
