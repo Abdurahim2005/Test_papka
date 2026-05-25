@@ -477,8 +477,8 @@ TEXTS = {
             "⏱ *40 soniya* ichida tugma bosilmasa — avtozip.\n\n"
             "📋 *Cheklovlar:*\n"
             "• Max *{max_files} ta fayl* (bir ZIP uchun)\n"
-            "• Max *300 MB* umumiy hajm\n"
-            "• Kuniga *3 ta ZIP*"
+            "• Max *{max_storage} MB* umumiy hajm\n"
+            "• Kuniga *{max_zips} ta ZIP*"
         ),
         "files_saved":  "✅ *{count} ta fayl* qabul qilindi!\n\n👇 ZIP yasash tugmasini bosing:",
         "receiving":    "📥 *Fayllar qabul qilinmoqda...*",
@@ -565,8 +565,8 @@ TEXTS = {
             "⏱ *Auto-zipped* after 40 seconds.\n\n"
             "📋 *Limits:*\n"
             "• Max *{max_files} files* per ZIP\n"
-            "• Max *300 MB* total size\n"
-            "• *3 ZIPs* per day"
+            "• Max *{max_storage} MB* total size\n"
+            "• *{max_zips} ZIPs* per day"
         ),
         "contact_text": "📞 Click the button below to contact the admin:",
         "files_saved":  "✅ *{count} file(s)* received!\n\n👇 Press Create ZIP when ready:",
@@ -637,8 +637,22 @@ TEXTS = {
 def tx(uid: int, key: str, **kw) -> str:
     lang = get_lang(uid) or "uz"
     text = TEXTS.get(lang, TEXTS["uz"]).get(key, key)
+    
+    # Avtomatik o'zgaruvchilarni matnga yetkazish
     if 'max_files' not in kw:
         kw['max_files'] = get_user_max_files(uid) if uid else MAX_FILES
+        
+    if 'max_zips' not in kw or 'max_storage' not in kw:
+        # get_user_limits(uid) funksiyangiz (max_zips, max_storage) qaytaradi deb hisoblaymiz
+        max_zips, max_storage = get_user_limits(uid) if uid else (DEFAULT_ZIPS_DAY, DEFAULT_STORAGE)
+        
+        if 'max_zips' not in kw:
+            kw['max_zips'] = max_zips
+            
+        if 'max_storage' not in kw:
+            # Baytni MB ga o'giramiz: 314572800 / 1024 / 1024 = 300
+            kw['max_storage'] = int(max_storage / 1024 / 1024)
+            
     return text.format(**kw)
 
 def main_keyboard(uid: int):
