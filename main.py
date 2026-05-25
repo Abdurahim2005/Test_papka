@@ -1039,17 +1039,19 @@ async def receive_file(client, message: Message, obj, filename: str):
     message._handled = True
 
     if is_banned(uid):
+        # Banlangan foydalanuvchini tozalash ma'qul, buni qoldirishingiz mumkin
         await safe_delete(message)
         return
 
     lang = get_lang(uid) or "uz"
     if not await gate_check(client, uid, message.chat.id, lang):
+        # Kanallarga a'zo bo'lmaganda yuborilgan faylni o'chiramiz (tartib uchun)
         await safe_delete(message)
         return
 
     max_zips, max_storage = get_user_limits(uid)
     if get_daily_zip_count(uid) >= max_zips:
-        await safe_delete(message)
+        # 🔥 O'ZGARTIRILDI: safe_delete olib tashlandi. Fayl chatda qoladi!
         schedule_limit_msg(client, message.chat.id, uid)
         return
 
@@ -1064,26 +1066,25 @@ async def receive_file(client, message: Message, obj, filename: str):
     async with lock:
         save_path = unique_path(udir, safe_name)
 
-        # 1. AGAR YANGI PAKET BO'LSA: Diskdagi real fayllarni faqat bir marta sanab olamiz
+        # 1. Paket boshlanganda diskni bir marta sanab olish
         if user_downloading.get(uid, 0) == 0:
             if os.path.exists(udir):
-                # Vaqtinchalik (.temp, .part) fayllarni sanashdan mutlaqo cheklaymiz!
                 disk_files = [f for f in os.listdir(udir) if os.path.isfile(os.path.join(udir, f)) and not f.endswith(('.temp', '.part', '.download'))]
                 user_base_count[uid] = len(disk_files)
             else:
                 user_base_count[uid] = 0
 
         used_now = disk_used(uid) + user_reserved_bytes.get(uid, 0)
-        
-        # 2. HAQIQIY JORIY HISOB: Diskdagi aniq fayllar + hozir yuklanayotganlar soni
         cur_cnt = user_base_count.get(uid, 0) + user_downloading.get(uid, 0)
 
-        # Limitni tekshirish
+        # 2. Limitlarni tekshirish
         if cur_cnt >= get_user_max_files(uid):
             user_excess[uid] = user_excess.get(uid, 0) + 1
             schedule_task(user_debounce, uid, _send_excess_msg(client, message.chat.id, uid))
+            # 🔥 Fayl qabul qilinmadi (accepted = False), return bo'ladi va chatda qoladi!
         elif used_now + fsize > max_storage:
             user_storage_rej[uid] = user_storage_rej.get(uid, 0) + 1
+            
             async def _send_storage_full_msg(chat_id, u, _used_now=used_now, _max_storage=max_storage):
                 await asyncio.sleep(DEBOUNCE_SEC)
                 rej_cnt = user_storage_rej.pop(u, 0)
@@ -1111,18 +1112,20 @@ async def receive_file(client, message: Message, obj, filename: str):
                 user_status_msg[u] = sfm
                 await cancel_task(user_auto_zip, u)
                 start_auto_zip(client, chat_id, u, delay=40, user_obj=None)
+
             schedule_task(user_debounce, uid, _send_storage_full_msg(message.chat.id, uid))
+            # 🔥 Fayl qabul qilinmadi (accepted = False), return bo'ladi va chatda qoladi!
         else:
             was_downloading = user_downloading.get(uid, 0) > 0
             user_reserved_bytes[uid] = user_reserved_bytes.get(uid, 0) + fsize
             user_downloading[uid]    = user_downloading.get(uid, 0) + 1
             accepted = True
 
+    # Agar qabul qilinmagan bo'lsa, shunchaki funksiyani yakunlaymiz (fayl chatda o'chmaydi!)
     if not accepted:
-        await safe_delete(message)
         return
 
-    # Oldingi taymer va xabarlarni tozalash
+    # Oldingi taymer va xabarlarni tozalash (Faqat qabul qilingan fayllar uchun)
     await cancel_task(user_auto_zip, uid)
     sm_old = user_status_msg.pop(uid, None)
     await safe_delete(sm_old)
@@ -1136,7 +1139,7 @@ async def receive_file(client, message: Message, obj, filename: str):
         if not user_batch_active.get(uid, False):
             schedule_batch_timer(uid, message.chat.id, client)
 
-    # Faylni yuklash jarayoni
+    # Faylni diskka yuklash jarayoni
     download_success = False
     try:
         await message.download(file_name=save_path)
@@ -1148,14 +1151,12 @@ async def receive_file(client, message: Message, obj, filename: str):
             user_downloading[uid]    = max(0, user_downloading.get(uid, 1) - 1)
             user_reserved_bytes[uid] = max(0, user_reserved_bytes.get(uid, fsize) - fsize)
             
-            # 3. SIZ AYTGAN G'OYA: Yuklash muvaffaqiyatli bo'lsagina bazaviy hisobga +1 qo'shamiz!
             if download_success:
                 user_base_count[uid] = user_base_count.get(uid, 0) + 1
 
         await check_batch_complete(client, uid, message.chat.id, message.from_user)
-    # 🔥 MANA SHU JOYI O'ZGARDI:
-    # Faqat bot muvaffaqiyatli qabul qilib, yuklab olgan fayllarnigina chatdan o'chiradi!
-    # Limitga siqmay qolgan yoki xotira to'lgani uchun rad etilgan fayllar chatda o'chmasdan qoladi.
+
+    # 🔥 FAQATGINA muvaffaqiyatli qabul qilingan va yuklangan faylni chatdan tozalaymiz!
     if accepted and download_success:
         await safe_delete(message)
 # ════════════════════════════════════════════════════════════
